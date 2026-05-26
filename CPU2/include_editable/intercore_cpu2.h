@@ -16,8 +16,6 @@ enum
 extern volatile uint32_t g_cpu2_main_entered;
 extern volatile uint32_t g_cpu2_tick_count;
 extern volatile uint32_t g_cpu2_handshake_status;
-extern volatile uint32_t g_cpu1_to_cpu2_mailbox;
-extern volatile uint32_t g_cpu2_to_cpu1_mailbox;
 
 void intercore_cpu2_init(void);
 void intercore_cpu2_service(void);
