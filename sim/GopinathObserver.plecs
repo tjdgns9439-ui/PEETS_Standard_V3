@@ -1,0 +1,279 @@
+Plecs {
+  Name          "GopinathObserver"
+  Version       "4.7"
+  CircuitModel  "ContStateSpace"
+  StartTime     "0.0"
+  TimeSpan      "1.0"
+  Timeout       ""
+  Solver        "auto"
+  MaxStep       "1e-3"
+  InitStep      "-1"
+  FixedStep     "1e-4"
+  Refine        "1"
+  ZCStepSize    "1e-9"
+  RelTol        "1e-3"
+  AbsTol        "-1"
+  TurnOnThreshold "0"
+  SyncFixedStepTasks "1"
+  UseSingleCommonBaseRate "1"
+  LossVariableLimitExceededMsg "3"
+  NegativeSwitchLossMsg "3"
+  DivisionParameterTooSmallMsg "3"
+  StiffnessDetectionMsg "2"
+  MaxConsecutiveZCs "1000"
+  AlgebraicLoopWithStateMachineMsg "2"
+  AssertionAction "1"
+  InitializationCommands "% Induction machine parameters (edit to match your motor)\nRs = 1.0;   % stator resistance [ohm]\nRr = 1.0;   % rotor resistance  [ohm]\nLs = 0.10;  % stator inductance [H]\nLr = 0.10;  % rotor inductance  [H]\nLm = 0.095; % magnetizing inductance [H]\nK1 = 20.0;  % observer PI proportional gain\nK2 = 400.0; % observer PI integral gain\nTs = 1e-4;  % observer sample time [s]"
+  InitialState  "1"
+  SystemState   ""
+  TaskingMode   "1"
+  TaskConfigurations ""
+  CodeGenParameterInlining "2"
+  CodeGenFloatingPointFormat "2"
+  CodeGenAbsTimeUsageMsg "3"
+  CodeGenBaseName ""
+  CodeGenOutputDir ""
+  CodeGenExtraOpts ""
+  CodeGenTarget "Generic"
+  CodeGenTargetSettings ""
+  ExtendedMatrixPrecision "1"
+  MatrixSignificantDigits "6"
+  EnableStateSpaceSplitting "2"
+  DisplayStateSpaceSplitting "1"
+  DiscretizationMethod "2"
+  ExternalModeSettings ""
+  AlgebraicLoopMsg "3"
+  Schematic {
+    Location      [0, 23; 1280, 720]
+    ZoomFactor    1
+    SliderStatus  "0"
+    ShowBrowser   "0"
+    BrowserWidth  "100"
+    Component {
+      Type          CScript
+      Name          "Gopinath\nHybrid Flux\nObserver"
+      Show          1
+      Position      [480, 300]
+      Direction     right
+      Flipped       0
+      Frame         [-60, -55; 60, 55]
+      LabelPosition south
+      Parameter {
+        Variable      "NumInputs"
+        Value         "5"
+        Show          0
+      }
+      Parameter {
+        Variable      "NumOutputs"
+        Value         "4"
+        Show          0
+      }
+      Parameter {
+        Variable      "NumContStates"
+        Value         "0"
+        Show          0
+      }
+      Parameter {
+        Variable      "NumDiscStates"
+        Value         "6"
+        Show          0
+      }
+      Parameter {
+        Variable      "NumZCSignals"
+        Value         "0"
+        Show          0
+      }
+      Parameter {
+        Variable      "SampleTime"
+        Value         "Ts"
+        Show          0
+      }
+      Parameter {
+        Variable      "Parameters"
+        Value         "Rs Rr Ls Lr Lm K1 K2"
+        Show          0
+      }
+      Parameter {
+        Variable      "CodeDeclarations"
+        Value         "#define RS    ParamRealData(0,0)\n#define RR    ParamRealData(1,0)\n#define LS    ParamRealData(2,0)\n#define LR    ParamRealData(3,0)\n#define LM    ParamRealData(4,0)\n#define K1    ParamRealData(5,0)\n#define K2    ParamRealData(6,0)\n#define TS    GetSampleTimePeriod(0)\n#define TAUR  (LR/RR)\n#define SIGMA (1.0-(LM*LM)/(LS*LR))"
+        Show          0
+      }
+      Parameter {
+        Variable      "CodeStart"
+        Value         "int i;\nfor(i=0;i<6;i++) DiscState(i)=0.0;"
+        Show          0
+      }
+      Parameter {
+        Variable      "CodeOutputs"
+        Value         "double th=InputSignal(0,4), s=sin(th), c=cos(th);\ndouble ia=InputSignal(0,2), ib=InputSignal(0,3);\ndouble lcm_d=DiscState(0), lcm_q=DiscState(1);\ndouble psi_a=DiscState(2), psi_b=DiscState(3);\nOutputSignal(0,0)=(LR/LM)*(psi_a-SIGMA*LS*ia);   /* lambda_r alpha */\nOutputSignal(0,1)=(LR/LM)*(psi_b-SIGMA*LS*ib);   /* lambda_r beta  */\nOutputSignal(0,2)=lcm_d*c-lcm_q*s;               /* current-model alpha */\nOutputSignal(0,3)=lcm_d*s+lcm_q*c;               /* current-model beta  */"
+        Show          0
+      }
+      Parameter {
+        Variable      "CodeUpdate"
+        Value         "double th=InputSignal(0,4), s=sin(th), c=cos(th);\ndouble Va=InputSignal(0,0), Vb=InputSignal(0,1);\ndouble ia=InputSignal(0,2), ib=InputSignal(0,3);\ndouble lcm_d=DiscState(0), lcm_q=DiscState(1);\ndouble psi_a=DiscState(2), psi_b=DiscState(3);\ndouble lcm_a=lcm_d*c-lcm_q*s, lcm_b=lcm_d*s+lcm_q*c;\ndouble lr_a=(LR/LM)*(psi_a-SIGMA*LS*ia);\ndouble lr_b=(LR/LM)*(psi_b-SIGMA*LS*ib);\ndouble id_r= ia*c+ib*s, iq_r=-ia*s+ib*c;\ndouble ea=lcm_a-lr_a, eb=lcm_b-lr_b;\nDiscState(4)+=TS*K2*ea;\nDiscState(5)+=TS*K2*eb;\ndouble corr_a=K1*ea+DiscState(4);\ndouble corr_b=K1*eb+DiscState(5);\nDiscState(0)=lcm_d+TS*((LM/TAUR)*id_r-(1.0/TAUR)*lcm_d);\nDiscState(1)=lcm_q+TS*((LM/TAUR)*iq_r-(1.0/TAUR)*lcm_q);\nDiscState(2)=psi_a+TS*(Va-RS*ia+corr_a);\nDiscState(3)=psi_b+TS*(Vb-RS*ib+corr_b);"
+        Show          0
+      }
+      Parameter {
+        Variable      "CodeDerivatives"
+        Value         ""
+        Show          0
+      }
+      Parameter {
+        Variable      "CodeTerminate"
+        Value         ""
+        Show          0
+      }
+    }
+    Component {
+      Type          Constant
+      Name          "Valpha"
+      Show          1
+      Position      [180, 230]
+      Direction     right
+      Flipped       0
+      LabelPosition south
+      Parameter {
+        Variable      "Value"
+        Value         "0"
+        Show          1
+      }
+    }
+    Component {
+      Type          Constant
+      Name          "Vbeta"
+      Show          1
+      Position      [180, 270]
+      Direction     right
+      Flipped       0
+      LabelPosition south
+      Parameter {
+        Variable      "Value"
+        Value         "0"
+        Show          1
+      }
+    }
+    Component {
+      Type          Constant
+      Name          "ialpha"
+      Show          1
+      Position      [180, 310]
+      Direction     right
+      Flipped       0
+      LabelPosition south
+      Parameter {
+        Variable      "Value"
+        Value         "0"
+        Show          1
+      }
+    }
+    Component {
+      Type          Constant
+      Name          "ibeta"
+      Show          1
+      Position      [180, 350]
+      Direction     right
+      Flipped       0
+      LabelPosition south
+      Parameter {
+        Variable      "Value"
+        Value         "0"
+        Show          1
+      }
+    }
+    Component {
+      Type          Constant
+      Name          "thetaR"
+      Show          1
+      Position      [180, 390]
+      Direction     right
+      Flipped       0
+      LabelPosition south
+      Parameter {
+        Variable      "Value"
+        Value         "0"
+        Show          1
+      }
+    }
+    Component {
+      Type          Mux
+      Name          "Mux"
+      Show          0
+      Position      [330, 300]
+      Direction     right
+      Flipped       0
+      Parameter {
+        Variable      "Width"
+        Value         "5"
+        Show          0
+      }
+    }
+    Component {
+      Type          Scope
+      Name          "Flux Scope"
+      Show          1
+      Position      [680, 300]
+      Direction     right
+      Flipped       0
+      Location      [0, 23; 1280, 720]
+      Parameter {
+        Variable      "NumberOfPlots"
+        Value         "1"
+        Show          0
+      }
+      Parameter {
+        Variable      "Width"
+        Value         "4"
+        Show          0
+      }
+    }
+    Connection {
+      Type          Signal
+      SrcComponent  "Valpha"
+      SrcTerminal   1
+      DstComponent  "Mux"
+      DstTerminal   2
+    }
+    Connection {
+      Type          Signal
+      SrcComponent  "Vbeta"
+      SrcTerminal   1
+      DstComponent  "Mux"
+      DstTerminal   3
+    }
+    Connection {
+      Type          Signal
+      SrcComponent  "ialpha"
+      SrcTerminal   1
+      DstComponent  "Mux"
+      DstTerminal   4
+    }
+    Connection {
+      Type          Signal
+      SrcComponent  "ibeta"
+      SrcTerminal   1
+      DstComponent  "Mux"
+      DstTerminal   5
+    }
+    Connection {
+      Type          Signal
+      SrcComponent  "thetaR"
+      SrcTerminal   1
+      DstComponent  "Mux"
+      DstTerminal   6
+    }
+    Connection {
+      Type          Signal
+      SrcComponent  "Mux"
+      SrcTerminal   1
+      DstComponent  "Gopinath\nHybrid Flux\nObserver"
+      DstTerminal   1
+    }
+    Connection {
+      Type          Signal
+      SrcComponent  "Gopinath\nHybrid Flux\nObserver"
+      SrcTerminal   2
+      DstComponent  "Flux Scope"
+      DstTerminal   1
+    }
+  }
+}

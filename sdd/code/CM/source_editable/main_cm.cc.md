@@ -23,7 +23,7 @@
 ## 주요 입력과 출력
 
 - 입력: `g_cpu1_to_cm_mailbox`
-- 출력: `g_cm_to_cpu1_mailbox`, `g_cm_main_entered`, `g_cm_handshake_status`
+- 출력: `g_cm_to_cpu1_mailbox`, `g_cm_main_entered`, `g_cm_local_handshake_status`, `g_cm_liveness_count`
 - shared state:
   - `g_cpu1_to_cm_mailbox`
   - `g_cm_to_cpu1_mailbox`
@@ -66,7 +66,7 @@
 - 실패 조건: CPU1 token을 보지 못해 ACK를 쓰지 못함
 - 시스템 동작: `CM_STATUS_WAITING_BOOT_READY` 상태 유지
 - 후속 기능 차단 조건: ACK 전에는 UART/CAN/Ethernet/USB bring-up을 시작하지 않는다.
-- debug 관측 방법: `g_cm_main_entered`, `g_cm_handshake_status`, MSGRAM mailbox 값 확인
+- debug 관측 방법: `g_cm_main_entered`, `g_cm_local_handshake_status`, MSGRAM mailbox 값 확인
 
 ## 관련 문서
 
@@ -81,7 +81,7 @@
 ## 관련 테스트와 검증
 
 - bench 절차: CM image load, CPU1에서 CM release, CM status 변수와 ACK token 확인
-- 기대 관측값: `g_cm_main_entered == 1`, `g_cm_handshake_status == CM_STATUS_ACK_WRITTEN`
+- 기대 관측값: `g_cm_main_entered == 1`, `g_cm_local_handshake_status == CM_STATUS_ACK_WRITTEN`
 - 성공 조건: CPU1이 ACK token을 timeout 전에 관측
 - 실패 시 확인 항목: CM boot mode, CM image load 여부, MSGRAM section 이름, CPU1 token 값
 

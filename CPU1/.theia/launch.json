@@ -4,16 +4,16 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "CM",
+      "name": "CPU1",
       "type": "ccs-debug",
       "request": "launch",
       "projectInfo": {
-        "name": "CM",
-        "resourceId": "/CM"
+        "name": "CPU1",
+        "resourceId": "/CPU1"
       },
       "launchSettings": {
         "coresToLoadForProjectLaunch": [
-          "Cortex_M4_0"
+          "C28xx_CPU1"
         ]
       }
     }

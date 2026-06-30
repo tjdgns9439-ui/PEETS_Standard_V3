@@ -8,6 +8,7 @@
 //
 // Main
 //
+#ifndef CM_ENABLE_LWIP_EXAMPLE
 void main(void)
 {
     CM_init();
@@ -22,8 +23,10 @@ void main(void)
         comm_cm_uart_tx_service();
         comm_cm_ethernet_mdio_test_service();
         comm_cm_usb_register_test_service();
+        comm_cm_liveness_service();
     }
 }
+#endif
 
 //
 // End of File

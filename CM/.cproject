@@ -44,13 +44,23 @@
                                     <listOptionValue value="${COM_TI_C2000WARE_INCLUDE_PATH}"/>
                                     <listOptionValue value="${PROJECT_ROOT}"/>
                                     <listOptionValue value="${PROJECT_ROOT}/device_not_editable"/>
+                                    <listOptionValue value="${PROJECT_ROOT}/source_lwip"/>
                                     <listOptionValue value="${C2000WARE_DLIB_ROOT}"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INSTALL_DIR}/driverlib/f2838x"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INSTALL_DIR}/libraries/communications/Ethernet/third_party/lwip"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INSTALL_DIR}/libraries/communications/Ethernet/third_party/lwip/lwip-2.1.2"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INSTALL_DIR}/libraries/communications/Ethernet/third_party/lwip/lwip-2.1.2/src/include"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INSTALL_DIR}/libraries/communications/Ethernet/third_party/lwip/lwip-2.1.2/src/apps"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INSTALL_DIR}/libraries/communications/Ethernet/third_party/lwip/lwip-2.1.2/src/apps/http"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INSTALL_DIR}/libraries/communications/Ethernet/third_party/lwip/ports/C2000/include"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INSTALL_DIR}/libraries/communications/Ethernet/third_party/lwip/driver"/>
                                     <listOptionValue value="${CG_TOOL_ROOT}/include"/>
                                 </option>
                                 <option id="com.ti.ccstudio.buildDefinitions.TMS470_20.2.compilerID.LITTLE_ENDIAN.1297588680" superClass="com.ti.ccstudio.buildDefinitions.TMS470_20.2.compilerID.LITTLE_ENDIAN" value="true" valueType="boolean"/>
                                 <option id="com.ti.ccstudio.buildDefinitions.TMS470_20.2.compilerID.DEFINE.1692502647" superClass="com.ti.ccstudio.buildDefinitions.TMS470_20.2.compilerID.DEFINE" valueType="definedSymbols">
                                     <listOptionValue value="${COM_TI_C2000WARE_SYMBOLS}"/>
                                     <listOptionValue value="DEBUG"/>
+                                    <listOptionValue value="CM_ENABLE_LWIP_EXAMPLE"/>
                                 </option>
                                 <option id="com.ti.ccstudio.buildDefinitions.TMS470_20.2.compilerID.OPT_LEVEL.977587166" superClass="com.ti.ccstudio.buildDefinitions.TMS470_20.2.compilerID.OPT_LEVEL" value="com.ti.ccstudio.buildDefinitions.TMS470_20.2.compilerID.OPT_LEVEL.off" valueType="enumerated"/>
                             </tool>
@@ -128,13 +138,23 @@
                                     <listOptionValue value="${COM_TI_C2000WARE_INCLUDE_PATH}"/>
                                     <listOptionValue value="${PROJECT_ROOT}"/>
                                     <listOptionValue value="${PROJECT_ROOT}/device_not_editable"/>
+                                    <listOptionValue value="${PROJECT_ROOT}/source_lwip"/>
                                     <listOptionValue value="${C2000WARE_DLIB_ROOT}"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INSTALL_DIR}/driverlib/f2838x"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INSTALL_DIR}/libraries/communications/Ethernet/third_party/lwip"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INSTALL_DIR}/libraries/communications/Ethernet/third_party/lwip/lwip-2.1.2"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INSTALL_DIR}/libraries/communications/Ethernet/third_party/lwip/lwip-2.1.2/src/include"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INSTALL_DIR}/libraries/communications/Ethernet/third_party/lwip/lwip-2.1.2/src/apps"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INSTALL_DIR}/libraries/communications/Ethernet/third_party/lwip/lwip-2.1.2/src/apps/http"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INSTALL_DIR}/libraries/communications/Ethernet/third_party/lwip/ports/C2000/include"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INSTALL_DIR}/libraries/communications/Ethernet/third_party/lwip/driver"/>
                                     <listOptionValue value="${CG_TOOL_ROOT}/include"/>
                                 </option>
                                 <option id="com.ti.ccstudio.buildDefinitions.TMS470_20.2.compilerID.LITTLE_ENDIAN.1990146014" superClass="com.ti.ccstudio.buildDefinitions.TMS470_20.2.compilerID.LITTLE_ENDIAN" value="true" valueType="boolean"/>
                                 <option id="com.ti.ccstudio.buildDefinitions.TMS470_20.2.compilerID.DEFINE.756617715" superClass="com.ti.ccstudio.buildDefinitions.TMS470_20.2.compilerID.DEFINE" valueType="definedSymbols">
                                     <listOptionValue value="${COM_TI_C2000WARE_SYMBOLS}"/>
                                     <listOptionValue value="DEBUG"/>
+                                    <listOptionValue value="CM_ENABLE_LWIP_EXAMPLE"/>
                                     <listOptionValue value="_FLASH"/>
                                 </option>
                                 <option id="com.ti.ccstudio.buildDefinitions.TMS470_20.2.compilerID.OPT_LEVEL.435203768" superClass="com.ti.ccstudio.buildDefinitions.TMS470_20.2.compilerID.OPT_LEVEL" value="com.ti.ccstudio.buildDefinitions.TMS470_20.2.compilerID.OPT_LEVEL.off" valueType="enumerated"/>
