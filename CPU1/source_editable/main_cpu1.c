@@ -2,11 +2,18 @@
 #include "../CPU1/include_editable/intercore_cpu1.h"
 #include "../CPU1/include_editable/pinmux.h"
 #include "../CPU1/include_editable/pwm.h"
+#include "../CPU1/include_editable/loop_timing.h"
+#include "../CPU1/include_editable/watchdog.h"
 #include "easy28x_driverlib_v12.2.h" /* easyDSP real-time monitor kernel (CPU1/SCIA) */
 
 #define CPU1_HEARTBEAT_GPIO DEVICE_GPIO_PIN_LED1
 #define CPU1_HEARTBEAT_GPIO_CFG DEVICE_GPIO_CFG_LED1
 #define CPU1_HEARTBEAT_HALF_PERIOD_US 1000000U
+// easyDSP-writable LED command: write g_cpu1_led_command in easyDSP to drive LED1.
+#define CPU1_LED_CMD_HEARTBEAT 0U  // default: slow blink (~0.5 Hz)
+#define CPU1_LED_CMD_ON 1U         // solid on
+#define CPU1_LED_CMD_OFF 2U        // solid off
+#define CPU1_LED_CMD_BLINK_FAST 3U // fast blink (~5 Hz)
 #define CPU1_SUPERVISOR_STATUS_GPIO 107U
 #define CPU1_SUPERVISOR_STATUS_GPIO_CFG GPIO_107_GPIO107
 #define CPU1_ENET_PHY_POWERDOWN_GPIO 108U
@@ -25,6 +32,11 @@
 #define CPU1_CM_LIVENESS_STALE_LIMIT 5U
 #define CPU1_CPU2_LIVENESS_SUPERVISOR_ENABLE 1U
 #define CPU1_CPU2_LIVENESS_STALE_LIMIT 5U
+// System-fault policy: once a fault (CPU2 dead or manual inject) is detected, all
+// outputs are stopped; if it hasn't cleared within this window, reset the device.
+#define CPU1_FAULT_RESET_TIMEOUT_MS 10000U
+// Granularity at which the main-loop delay services the WD / LED / fault logic.
+#define CPU1_WD_SERVICE_CHUNK_US 100000U
 #define COMM_TEST_SCI_BASE SCIA_BASE
 #define COMM_TEST_SCI_TX_PIN 34U
 #define COMM_TEST_SCI_TX_PIN_CFG GPIO_34_SCIA_TX
@@ -66,6 +78,12 @@ volatile uint32_t g_cpu1_cpu2_liveness_last = 0U;
 volatile uint32_t g_cpu1_cpu2_liveness_stale_count = 0U;
 volatile uint32_t g_cpu1_cpu2_recovery_count = 0U;
 volatile uint32_t g_cpu1_cpu2_recovery_stage = 0U;
+volatile uint32_t g_cpu1_led_command = CPU1_LED_CMD_HEARTBEAT; // easyDSP-writable
+volatile uint32_t g_cpu1_cpu2_fault_latched = 0U; // last CPU2 fault CPU1 acted on
+volatile uint32_t g_cpu1_fault_inject = 0U;    // easyDSP-writable manual fault trigger
+volatile uint32_t g_cpu1_cpu2_dead = 0U;       // 1 = CPU2 not responding
+volatile uint32_t g_cpu1_system_fault = 0U;    // 1 = system in FAULT (safe) state
+volatile uint32_t g_cpu1_fault_elapsed_ms = 0U; // time spent in FAULT state
 
 static const uint32_t kBufferOeGpios[] = {
     42U, 43U, 46U, 50U, 100U};
@@ -352,12 +370,13 @@ static void cpu1_service_cm_liveness_supervisor(void)
 static void cpu1_service_cpu2_liveness_supervisor(void)
 {
 #if CPU1_CPU2_LIVENESS_SUPERVISOR_ENABLE
-    uint32_t cpu2_liveness = g_cpu2_to_cpu1_mailbox;
+    uint32_t cpu2_liveness = g_cpu2_monitor.mbox;
 
     if(cpu2_liveness != g_cpu1_cpu2_liveness_last)
     {
         g_cpu1_cpu2_liveness_last = cpu2_liveness;
         g_cpu1_cpu2_liveness_stale_count = 0U;
+        g_cpu1_cpu2_dead = 0U; // CPU2 responded -> alive
         return;
     }
 
@@ -372,6 +391,7 @@ static void cpu1_service_cpu2_liveness_supervisor(void)
         return;
     }
 
+    g_cpu1_cpu2_dead = 1U; // CPU2 silent past the stale limit -> considered dead
     g_cpu1_cpu2_recovery_stage = 1U;
     SysCtl_controlCPU2Reset(SYSCTL_CORE_ACTIVE);
     DEVICE_DELAY_US(1000U);
@@ -380,10 +400,152 @@ static void cpu1_service_cpu2_liveness_supervisor(void)
     intercore_cpu1_run_cpu2_handshake();
 
     ++g_cpu1_cpu2_recovery_count;
-    g_cpu1_cpu2_liveness_last = g_cpu2_to_cpu1_mailbox;
+    g_cpu1_cpu2_liveness_last = g_cpu2_monitor.mbox;
     g_cpu1_cpu2_liveness_stale_count = 0U;
     g_cpu1_cpu2_recovery_stage = 3U;
 #endif
+}
+
+//
+// CPU2 fault auto-response. If CPU2 reports a fault (e.g. e-stop) in its
+// CPU2->CPU1 monitor block, CPU1 forces the board outputs to the safe (off)
+// state and stops the loop from re-enabling them. Serviced every ~100 ms.
+//
+static void cpu1_service_cpu2_fault(void)
+{
+    if (g_cpu2_handshake_status != CPU2_HANDSHAKE_STATUS_OK)
+    {
+        return; // CPU2 not up -> its monitor block isn't trustworthy yet
+    }
+
+    if (g_cpu2_monitor.fault_code != CPU2_FAULT_NONE)
+    {
+        if (g_board_io_outputs_enabled != 0U)
+        {
+            cpu1_set_board_io_outputs(0U);
+        }
+        g_board_io_enable_request = 0U; // don't let the loop re-enable while faulted
+        g_cpu1_cpu2_fault_latched = g_cpu2_monitor.fault_code;
+    }
+}
+
+//
+// Safe state: stop all board outputs / PWM and keep them stopped.
+//
+static void cpu1_enter_safe_state(void)
+{
+    g_board_io_enable_request = 0U; // don't let anything re-enable while faulted
+    if (g_board_io_outputs_enabled != 0U)
+    {
+        cpu1_set_board_io_outputs(0U); // also forces PWM safe-off
+    }
+    pwm_smoke_force_safe_off();
+}
+
+//
+// System-fault supervisor (serviced every ~100 ms). A fault = CPU2 not responding
+// OR a manual inject (g_cpu1_fault_inject). While faulted, all outputs are held
+// off; if the fault does not clear within CPU1_FAULT_RESET_TIMEOUT_MS, the whole
+// device is reset. Recovers automatically if the condition clears in time.
+//
+static void cpu1_service_system_fault(void)
+{
+    // Wall-clock elapsed via the free-running CPU Timer 0 (started by
+    // loop_timing_init), so blocking work (e.g. a CPU2 recovery handshake) still
+    // counts toward the timeout. Down-counter: delta = last - now (mod 2^32).
+    static uint32_t s_last_count = 0U;
+    static uint16_t s_count_valid = 0U;
+    uint32_t now = CPUTimer_getTimerCount(CPUTIMER0_BASE);
+    uint32_t fault = (g_cpu1_cpu2_dead != 0U) || (g_cpu1_fault_inject != 0U);
+
+    if (fault)
+    {
+        if (g_cpu1_system_fault == 0U)
+        {
+            g_cpu1_system_fault = 1U; // entering FAULT
+            g_cpu1_fault_elapsed_ms = 0U;
+        }
+        else if (s_count_valid != 0U)
+        {
+            uint32_t delta = (uint32_t)(s_last_count - now);
+            g_cpu1_fault_elapsed_ms += delta / (DEVICE_SYSCLK_FREQ / 1000U);
+            if (g_cpu1_fault_elapsed_ms >= CPU1_FAULT_RESET_TIMEOUT_MS)
+            {
+                watchdog_force_reset(); // does not return
+            }
+        }
+        cpu1_enter_safe_state(); // keep everything safe-off every cycle
+    }
+    else if (g_cpu1_system_fault != 0U)
+    {
+        g_cpu1_system_fault = 0U; // cleared within the grace window -> resume
+        g_cpu1_fault_elapsed_ms = 0U;
+    }
+
+    s_last_count = now;
+    s_count_valid = 1U;
+}
+
+//
+// LED command handler. easyDSP (or any code) writes g_cpu1_led_command; this is
+// serviced every ~100 ms so LED1 reacts within 100 ms. Default keeps the
+// original heartbeat blink. A system fault overrides it with a fast blink.
+//
+static void cpu1_service_led(void)
+{
+    static uint32_t led_tick = 0U;
+
+    ++led_tick;
+
+    if (g_cpu1_system_fault != 0U)
+    {
+        GPIO_togglePin(CPU1_HEARTBEAT_GPIO); // FAULT indication: fast blink
+        return;
+    }
+
+    switch (g_cpu1_led_command)
+    {
+    case CPU1_LED_CMD_ON:
+        GPIO_writePin(CPU1_HEARTBEAT_GPIO, 0U); // LED1 is active-low: 0 = on
+        break;
+    case CPU1_LED_CMD_OFF:
+        GPIO_writePin(CPU1_HEARTBEAT_GPIO, 1U); // 1 = off
+        break;
+    case CPU1_LED_CMD_BLINK_FAST:
+        GPIO_togglePin(CPU1_HEARTBEAT_GPIO); // toggles every ~100 ms => ~5 Hz
+        break;
+    case CPU1_LED_CMD_HEARTBEAT:
+    default:
+        if ((led_tick % 10U) == 0U) // 10 x 100 ms => ~1 s toggle (~0.5 Hz)
+        {
+            GPIO_togglePin(CPU1_HEARTBEAT_GPIO);
+        }
+        break;
+    }
+}
+
+//
+// Blocking delay that services the watchdog and the LED command every
+// CPU1_WD_SERVICE_CHUNK_US so a long wait (the 1 s heartbeat delay) never trips
+// the ~0.84 s watchdog and the LED still reacts to commands within ~100 ms.
+//
+static void cpu1_delay_us_serviced(uint32_t total_us)
+{
+    uint32_t remaining = total_us;
+
+    while (remaining > 0U)
+    {
+        uint32_t chunk = (remaining > CPU1_WD_SERVICE_CHUNK_US)
+                             ? CPU1_WD_SERVICE_CHUNK_US
+                             : remaining;
+        watchdog_service();
+        DEVICE_DELAY_US(chunk);
+        cpu1_service_system_fault(); // may not return (device reset after timeout)
+        cpu1_service_led();
+        cpu1_service_cpu2_fault();
+        remaining -= chunk;
+    }
+    watchdog_service();
 }
 
 //
@@ -419,42 +581,60 @@ void main(void)
     pwm_smoke_force_safe_off();
     g_epwm_smoke_initialized = 1U;
 
-#ifdef _FLASH
     /*
-     * Standalone boot after an easyDSP FLASH download (no debugger):
-     * CPU1 boots CPU2 and CM from their own flash (sector 0) before the
-     * intercore handshakes below, which expect CPU2/CM to be running.
-     * Under a JTAG RAM build (_FLASH undefined) the debugger boots all cores,
-     * so these calls are compiled out. Verify the sector matches each core's
-     * flash entry in its *_FLASH linker cmd if you relocate the boot image.
+     * easyDSP real-time monitor (CPU1 SCI-A @ GPIO29 TX / GPIO28 RX; CPU2 SCI-B
+     * @ GPIO14 TX / GPIO15 RX, 115200). New board routes easyDSP headers to the
+     * ROM SCI-boot pins so download + monitoring both work.
+     * Initialized BEFORE the intercore handshakes so the SCI agent starts even
+     * when CM/CPU2 are not loaded. Otherwise the handshakes below block here and
+     * easyDSP_SCI_Init() is never reached, so the agent never runs and easyDSP
+     * shows "?". It registers the SCIA RX ISR and enables EINT/ERTM internally.
+     * Keep CPU1_COMM_TEST_ENABLE = 0 so SCIA is free.
      */
-    Device_bootCPU2(BOOTMODE_BOOT_TO_FLASH_SECTOR0);
-    Device_bootCM(BOOTMODE_BOOT_TO_FLASH_SECTOR0);
-#endif
-
-    intercore_cpu1_run_cm_handshake();
-    intercore_cpu1_run_cpu2_handshake();
-
     /*
-     * easyDSP real-time monitor (CPU1, SCIA @ GPIO34 TX / GPIO49 RX, 115200).
-     * Must run after PIE init; easyDSP_SCI_Init() registers the SCIA RX ISR and
-     * enables EINT/ERTM internally. Keep CPU1_COMM_TEST_ENABLE = 0 so SCIA is free.
+     * Release GPIO49/GPIO34 from SCIA_RX/SCIA_TX. The sysconfig GPIO_setPinMuxConfig()
+     * above still maps SCI-A to the OLD board pins (GPIO49 = SCIA_RX, GPIO34 = SCIA_TX).
+     * easyDSP_SCI_Init() below maps SCI-A to the NEW board pins (GPIO28 RX / GPIO29 TX).
+     * Leaving GPIO49 as a *second* SCIA_RX pin ties the SCI-A RX input net to that
+     * idle-high, unconnected pin, which masks easyDSP's data on GPIO28 -> the kernel
+     * never receives and easyDSP shows "?". Revert them to plain GPIO so only GPIO28/29
+     * drive SCI-A.
      */
+    GPIO_setPinConfig(GPIO_49_GPIO49);
+    GPIO_setPinConfig(GPIO_34_GPIO34);
+
     Interrupt_initModule();
     Interrupt_initVectorTable();
     easyDSP_SCI_Init();
 
+    /*
+     * CPU2/CM are booted inside the handshake routines below (Device_bootCPU2/
+     * bootCM for FLASH; skipped for RAM builds where the debugger boots them).
+     */
+    intercore_cpu1_run_cm_handshake();
+    intercore_cpu1_run_cpu2_handshake();
+
+    loop_timing_init();
+    // Arm the watchdog only after the (up-to-5 s) boot handshakes so they can't
+    // trip it. From here a code hang resets CPU1 within ~0.84 s.
+    watchdog_init();
+
+
     for (;;)
     {
+        loop_timing_loop_begin();
+
         if (g_board_io_enable_request != g_board_io_outputs_enabled)
         {
             cpu1_set_board_io_outputs(g_board_io_enable_request);
         }
 
-        GPIO_togglePin(CPU1_HEARTBEAT_GPIO);
-        DEVICE_DELAY_US(CPU1_HEARTBEAT_HALF_PERIOD_US);
         cpu1_service_cm_liveness_supervisor();
         cpu1_service_cpu2_liveness_supervisor();
+
+        // Work done for this iteration; the delay below is the loop's idle time.
+        loop_timing_work_end();
+        cpu1_delay_us_serviced(CPU1_HEARTBEAT_HALF_PERIOD_US);
     }
 }
 

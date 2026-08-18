@@ -95,6 +95,12 @@ SECTIONS
    
    MSGRAM_CPU1_TO_CPU2 : > CPU1TOCPU2RAM, type=NOINIT
    MSGRAM_CPU2_TO_CPU1 : > CPU2TOCPU1RAM, type=NOINIT
+   /* App IPC objects at the HIGH end of the MSGRAM, clear of the driverlib IPC
+    * PutBuffer/GetBuffer at the low end. HIGH + identical region/object size =>
+    * same address in the CPU1 and CPU2 builds (required because CPU2 no longer
+    * links the driverlib IPC buffers, which used to shift both builds equally). */
+   MSGRAM_APP_C1TOC2   : > CPU1TOCPU2RAM (HIGH), type=NOINIT
+   MSGRAM_APP_C2TOC1   : > CPU2TOCPU1RAM (HIGH), type=NOINIT
    MSGRAM_CPU_TO_CM    : > CPUTOCMRAM, type=NOINIT
    MSGRAM_CM_TO_CPU    : > CMTOCPURAM, type=NOINIT
 

@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include "../CPU1/include_editable/cpu2_monitor_shared.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif

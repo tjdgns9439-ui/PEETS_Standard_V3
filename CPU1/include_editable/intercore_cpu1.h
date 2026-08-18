@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include "../CPU1/include_editable/cpu2_monitor_shared.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -32,8 +34,8 @@ extern volatile uint32_t g_cpu2_handshake_poll_count;
 
 extern volatile uint32_t g_cpu1_to_cm_mailbox;
 extern volatile uint32_t g_cm_to_cpu1_mailbox;
-extern volatile uint32_t g_cpu1_to_cpu2_mailbox;
-extern volatile uint32_t g_cpu2_to_cpu1_mailbox;
+/* CPU1<->CPU2 mailboxes are now g_cpu2_command.mbox / g_cpu2_monitor.mbox
+ * (see cpu2_monitor_shared.h). */
 
 void intercore_cpu1_run_cm_handshake(void);
 void intercore_cpu1_run_cpu2_handshake(void);

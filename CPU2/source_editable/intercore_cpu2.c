@@ -10,27 +10,48 @@ volatile uint32_t g_cpu2_tick_count = 0U;
 volatile uint32_t g_cpu2_local_handshake_status = 0U;
 volatile uint32_t g_cpu2_liveness_count = 0U;
 
-// MSGRAM mailbox는 CPU1 쪽(intercore_cpu1.c)과 같은 주소(section offset 0)를 보도록
-// plain word로 둔다. raw mailbox polling만 쓰므로 driverlib buffer pad는 두지 않는다.
-#pragma DATA_SECTION(g_cpu1_to_cpu2_mailbox, "MSGRAM_CPU1_TO_CPU2")
-volatile uint32_t g_cpu1_to_cpu2_mailbox;
+// CPU1 -> CPU2 command block (see cpu2_monitor_shared.h). mbox (field [0]) is the
+// handshake token (same address as the old g_cpu1_to_cpu2_mailbox); the rest are
+// commands CPU1/easyDSP write and CPU2 applies. App IPC section at the HIGH end
+// of the CPU1->CPU2 MSGRAM, matches CPU1's placement.
+#pragma DATA_SECTION(g_cpu2_command, "MSGRAM_APP_C1TOC2")
+volatile cpu2_command_t g_cpu2_command;
 
-#pragma DATA_SECTION(g_cpu2_to_cpu1_mailbox, "MSGRAM_CPU2_TO_CPU1")
-volatile uint32_t g_cpu2_to_cpu1_mailbox;
+// CPU2 -> CPU1 MSGRAM: single monitor mirror struct (see cpu2_monitor_shared.h).
+// mbox is the handshake/liveness mailbox (same address as the old
+// g_cpu2_to_cpu1_mailbox); the other fields mirror CPU2 state so the single
+// CPU1 SCI-A easyDSP module can read CPU2 without a 2nd SCI. Sole object in this
+// section so CPU1 and CPU2 place it at the same address (0x03B000).
+#pragma DATA_SECTION(g_cpu2_monitor, "MSGRAM_APP_C2TOC1")
+volatile cpu2_monitor_t g_cpu2_monitor;
 
 void intercore_cpu2_init(void)
 {
     g_cpu2_main_entered = 1U;
     g_cpu2_local_handshake_status = CPU2_LOCAL_HANDSHAKE_STATUS_WAITING_TOKEN;
+
+    // Seed the monitor mirror (MSGRAM is NOINIT). Do NOT touch mbox here: it is
+    // driven by the boot handshake with CPU1.
+    g_cpu2_monitor.main_entered = g_cpu2_main_entered;
+    g_cpu2_monitor.tick_count = 0U;
+    g_cpu2_monitor.local_handshake_status = g_cpu2_local_handshake_status;
+    g_cpu2_monitor.liveness_count = 0U;
+
+    // Command/fault status starts clean (MSGRAM is NOINIT).
+    g_cpu2_monitor.cmd_ack_seq = 0U;
+    g_cpu2_monitor.fault_code = CPU2_FAULT_NONE;
+    g_cpu2_monitor.applied_enable = 0U;
+    g_cpu2_monitor.applied_mode = 0U;
+    g_cpu2_monitor.applied_setpoint = 0U;
 }
 
 void intercore_cpu2_service(void)
 {
     if (g_cpu2_local_handshake_status != CPU2_LOCAL_HANDSHAKE_STATUS_ACK_SENT)
     {
-        if (g_cpu1_to_cpu2_mailbox == CPU1_TO_CPU2_BOOT_READY_TOKEN)
+        if (g_cpu2_command.mbox == CPU1_TO_CPU2_BOOT_READY_TOKEN)
         {
-            g_cpu2_to_cpu1_mailbox = CPU2_TO_CPU1_ACK_READY_TOKEN;
+            g_cpu2_monitor.mbox = CPU2_TO_CPU1_ACK_READY_TOKEN;
             g_cpu2_local_handshake_status =
                 CPU2_LOCAL_HANDSHAKE_STATUS_ACK_SENT;
         }
@@ -54,8 +75,27 @@ void intercore_cpu2_service(void)
             ++g_cpu2_liveness_count;
         }
 
-        g_cpu2_to_cpu1_mailbox = g_cpu2_liveness_count;
+        g_cpu2_monitor.mbox = g_cpu2_liveness_count;
     }
 
     ++g_cpu2_tick_count;
+
+    // Refresh the easyDSP monitor mirror (read by CPU1's single SCI-A module).
+    g_cpu2_monitor.main_entered = g_cpu2_main_entered;
+    g_cpu2_monitor.tick_count = g_cpu2_tick_count;
+    g_cpu2_monitor.local_handshake_status = g_cpu2_local_handshake_status;
+    g_cpu2_monitor.liveness_count = g_cpu2_liveness_count;
+
+    // Apply CPU1 -> CPU2 commands once the handshake is up (Stage 1: latch,
+    // acknowledge, and raise a fault on e-stop). Wire enable/mode/setpoint to the
+    // control loop when it exists.
+    if (g_cpu2_local_handshake_status == CPU2_LOCAL_HANDSHAKE_STATUS_ACK_SENT)
+    {
+        g_cpu2_monitor.applied_enable = g_cpu2_command.enable;
+        g_cpu2_monitor.applied_mode = g_cpu2_command.mode;
+        g_cpu2_monitor.applied_setpoint = g_cpu2_command.setpoint;
+        g_cpu2_monitor.fault_code =
+            (g_cpu2_command.estop != 0U) ? CPU2_FAULT_ESTOP : CPU2_FAULT_NONE;
+        g_cpu2_monitor.cmd_ack_seq = g_cpu2_command.seq;
+    }
 }
