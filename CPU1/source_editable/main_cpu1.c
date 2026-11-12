@@ -2,6 +2,7 @@
 #include "../CPU1/include_editable/intercore_cpu1.h"
 #include "../CPU1/include_editable/pinmux.h"
 #include "../CPU1/include_editable/pwm.h"
+#include "../CPU1/include_editable/analog.h"
 #include "../CPU1/include_editable/loop_timing.h"
 #include "../CPU1/include_editable/watchdog.h"
 #include "easy28x_driverlib_v12.2.h" /* easyDSP real-time monitor kernel (CPU1/SCIA) */
@@ -27,6 +28,19 @@
 #define CPU1_GPIO_DIAG_PIN 14U
 #define CPU1_GPIO_DIAG_PIN_CFG GPIO_14_GPIO14
 #define CPU1_ANALOG_TEST_ENABLE 0U
+// 1 = run the two full bridges on EPWM1..4 from g_pwm_config (see pwm.h).
+// Outputs stay off until g_pwm_config.enable = 1 AND the buffers are enabled.
+#define CPU1_PWM_360K_ENABLE 1U
+// 1 = PWM-triggered ADC (ADCINA2 / ADCINB2) + DAC A/B/C from g_analog (analog.h).
+#define CPU1_ANALOG_ENABLE 1U
+#if CPU1_ANALOG_ENABLE && !CPU1_PWM_360K_ENABLE
+#error "CPU1_ANALOG_ENABLE needs CPU1_PWM_360K_ENABLE (EPWM1 is the ADC trigger)"
+#endif
+// Boot default for the board output buffers: 0 = OFF at boot (safe). Turn the
+// buffers ON at runtime by writing g_board_io_enable_request = 1 in easyDSP (0 to
+// turn them back off). Set this to 1 only if you want them auto-enabled at boot.
+// *** WARNING: enabling the buffers drives ALL board outputs / the power stage. ***
+#define CPU1_PWM_360K_THRU_BUFFER 0U
 #define CPU1_COMM_TEST_ENABLE 0U
 #define CPU1_CM_LIVENESS_SUPERVISOR_ENABLE 1U
 #define CPU1_CM_LIVENESS_STALE_LIMIT 5U
@@ -56,6 +70,26 @@
 #define ANALOG_TEST_LOOP_DELAY_US 1000U
 #define ANALOG_TEST_DAC_MAX_CODE 4095U
 
+// --- ADC voltage monitor (continuous) ---
+// Connect the voltage to measure to the ADCINA0 pin (change CPU1_ADCMON_CHANNEL
+// for another channel). Set CPU1_ADCMON_VREF_MV to the board's ADC reference
+// (VREFHI) in millivolts, then fine-tune it against a known input voltage.
+// Superseded by CPU1_ANALOG_ENABLE: this monitor polls ADCA SOC0 / INT1 on
+// ADCINA0, which is the DACA output pin (interface DAC1) and the SOC / interrupt
+// the analog module uses. Do not enable both.
+#define CPU1_ADCMON_ENABLE 0U
+#if CPU1_ADCMON_ENABLE && CPU1_ANALOG_ENABLE
+#error "CPU1_ADCMON_ENABLE and CPU1_ANALOG_ENABLE both use ADCA SOC0/INT1"
+#endif
+#define CPU1_ADCMON_BASE ADCA_BASE
+#define CPU1_ADCMON_RESULT_BASE ADCARESULT_BASE
+#define CPU1_ADCMON_SOC ADC_SOC_NUMBER0
+#define CPU1_ADCMON_INT ADC_INT_NUMBER1
+#define CPU1_ADCMON_CHANNEL ADC_CH_ADCIN0 // ADCINA0 pin
+#define CPU1_ADCMON_ACQPS 64U
+#define CPU1_ADCMON_VREF_MV 3300U // VREFHI in mV (calibrate to your board)
+#define CPU1_ADCMON_MAXCODE 4095U // 12-bit full scale
+
 static volatile uint16_t g_pwm_smoke_value = 0U;
 volatile uint32_t g_board_io_enable_request = 0U;
 volatile uint32_t g_board_io_outputs_enabled = 0U;
@@ -84,6 +118,8 @@ volatile uint32_t g_cpu1_fault_inject = 0U;    // easyDSP-writable manual fault 
 volatile uint32_t g_cpu1_cpu2_dead = 0U;       // 1 = CPU2 not responding
 volatile uint32_t g_cpu1_system_fault = 0U;    // 1 = system in FAULT (safe) state
 volatile uint32_t g_cpu1_fault_elapsed_ms = 0U; // time spent in FAULT state
+volatile uint16_t g_cpu1_adc_raw = 0U;          // ADC result, 0..4095
+volatile uint32_t g_cpu1_adc_voltage_mv = 0U;   // measured voltage in millivolts
 
 static const uint32_t kBufferOeGpios[] = {
     42U, 43U, 46U, 50U, 100U};
@@ -320,7 +356,14 @@ static void cpu1_set_board_io_outputs(uint32_t enable)
         return;
     }
 
+#if CPU1_PWM_360K_ENABLE
+    // The full-bridge PWM owns the trip state of EPWM1..4 (pwm_config_service
+    // releases a leg only when g_pwm_config.enable / channel_sel / safety allow
+    // it). Do NOT clear every trip here: that would let all 12 EPWMs switch into
+    // the power stage until the next service call, even with enable = 0.
+#else
     pwm_smoke_release_outputs();
+#endif
 
     for (i = 0U; i < (sizeof(kBufferOeGpios) / sizeof(kBufferOeGpios[0])); ++i)
     {
@@ -428,6 +471,47 @@ static void cpu1_service_cpu2_fault(void)
         g_cpu1_cpu2_fault_latched = g_cpu2_monitor.fault_code;
     }
 }
+
+#if CPU1_ADCMON_ENABLE
+//
+// ADC voltage monitor: one-time setup of ADCA (12-bit, single-ended, SW trigger)
+// then periodic sampling of CPU1_ADCMON_CHANNEL into g_cpu1_adc_raw /
+// g_cpu1_adc_voltage_mv.
+//
+static void cpu1_adc_init(void)
+{
+    SysCtl_enablePeripheral(SYSCTL_PERIPH_CLK_ADCA); // ensure ADCA is clocked
+    DEVICE_DELAY_US(10U);
+
+    ADC_setPrescaler(CPU1_ADCMON_BASE, ADC_CLK_DIV_4_0);
+    ADC_setMode(CPU1_ADCMON_BASE, ADC_RESOLUTION_12BIT, ADC_MODE_SINGLE_ENDED);
+    ADC_setInterruptPulseMode(CPU1_ADCMON_BASE, ADC_PULSE_END_OF_CONV);
+    ADC_enableConverter(CPU1_ADCMON_BASE);
+    DEVICE_DELAY_US(1000U); // let the ADC core power up
+
+    ADC_setupSOC(CPU1_ADCMON_BASE, CPU1_ADCMON_SOC, ADC_TRIGGER_SW_ONLY,
+                 CPU1_ADCMON_CHANNEL, CPU1_ADCMON_ACQPS);
+    ADC_setInterruptSource(CPU1_ADCMON_BASE, CPU1_ADCMON_INT, CPU1_ADCMON_SOC);
+    ADC_enableInterrupt(CPU1_ADCMON_BASE, CPU1_ADCMON_INT);
+    ADC_clearInterruptStatus(CPU1_ADCMON_BASE, CPU1_ADCMON_INT);
+}
+
+static void cpu1_service_adc(void)
+{
+    uint16_t raw;
+
+    ADC_forceSOC(CPU1_ADCMON_BASE, CPU1_ADCMON_SOC);
+    while (!ADC_getInterruptStatus(CPU1_ADCMON_BASE, CPU1_ADCMON_INT))
+    {
+    }
+    ADC_clearInterruptStatus(CPU1_ADCMON_BASE, CPU1_ADCMON_INT);
+
+    raw = ADC_readResult(CPU1_ADCMON_RESULT_BASE, CPU1_ADCMON_SOC);
+    g_cpu1_adc_raw = raw;
+    g_cpu1_adc_voltage_mv =
+        ((uint32_t)raw * CPU1_ADCMON_VREF_MV) / CPU1_ADCMON_MAXCODE;
+}
+#endif // CPU1_ADCMON_ENABLE
 
 //
 // Safe state: stop all board outputs / PWM and keep them stopped.
@@ -543,6 +627,31 @@ static void cpu1_delay_us_serviced(uint32_t total_us)
         cpu1_service_system_fault(); // may not return (device reset after timeout)
         cpu1_service_led();
         cpu1_service_cpu2_fault();
+#if CPU1_ADCMON_ENABLE
+        cpu1_service_adc();
+#endif
+#if CPU1_PWM_360K_ENABLE
+        {
+            // Apply live PWM config; force outputs off on any fault. The reasons
+            // are also published in g_pwm_status so easyDSP shows WHY the PWM
+            // is off (disabled / fault / buffers off).
+            uint16_t pwm_block = 0U;
+            if (g_cpu1_system_fault != 0U)
+            {
+                pwm_block |= PWM_OFF_SYSTEM_FAULT;
+            }
+            if ((g_cpu2_handshake_status == CPU2_HANDSHAKE_STATUS_OK) &&
+                (g_cpu2_monitor.fault_code != CPU2_FAULT_NONE))
+            {
+                pwm_block |= PWM_OFF_CPU2_FAULT;
+            }
+            if (g_board_io_outputs_enabled == 0U)
+            {
+                pwm_block |= PWM_OFF_BUFFER;
+            }
+            pwm_config_service(pwm_block);
+        }
+#endif
         remaining -= chunk;
     }
     watchdog_service();
@@ -581,6 +690,18 @@ void main(void)
     pwm_smoke_force_safe_off();
     g_epwm_smoke_initialized = 1U;
 
+#if CPU1_PWM_360K_ENABLE
+    // Configure EPWM1..4 from g_pwm_config (frequency locked here). Live fields
+    // are applied each cycle by pwm_config_service() in the main-loop delay.
+    pwm_config_init();
+#if CPU1_PWM_360K_THRU_BUFFER
+    // Request the board output buffers ON so the 360 kHz passes to the buffer
+    // output. The main loop applies it (request != current state). WARNING: this
+    // enables ALL board outputs / the power stage.
+    g_board_io_enable_request = 1U;
+#endif
+#endif
+
     /*
      * easyDSP real-time monitor (CPU1 SCI-A @ GPIO29 TX / GPIO28 RX; CPU2 SCI-B
      * @ GPIO14 TX / GPIO15 RX, 115200). New board routes easyDSP headers to the
@@ -607,6 +728,13 @@ void main(void)
     Interrupt_initVectorTable();
     easyDSP_SCI_Init();
 
+#if CPU1_ANALOG_ENABLE
+    // PWM-triggered ADC + DACs. Needs the interrupt module (above) and the PWM
+    // period (pwm_config_init). Started before the handshakes so the analog
+    // values are live in easyDSP even when CM/CPU2 are not loaded.
+    analog_init();
+#endif
+
     /*
      * CPU2/CM are booted inside the handshake routines below (Device_bootCPU2/
      * bootCM for FLASH; skipped for RAM builds where the debugger boots them).
@@ -619,6 +747,9 @@ void main(void)
     // trip it. From here a code hang resets CPU1 within ~0.84 s.
     watchdog_init();
 
+#if CPU1_ADCMON_ENABLE
+    cpu1_adc_init();
+#endif
 
     for (;;)
     {
